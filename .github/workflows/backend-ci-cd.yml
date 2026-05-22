@@ -1,0 +1,92 @@
+name: backend-ci-cd
+
+on:
+  push:
+    branches:
+      - deploy
+
+env:
+  REPO_PREFIX: innovatech
+
+jobs:
+  build_push:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - name: ms-ventas
+            context: ./back-Ventas_SpringBoot/Springboot-API-REST
+          - name: ms-despachos
+            context: ./back-Despachos_SpringBoot/Springboot-API-REST-DESPACHO
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - id: select_registry
+        run: |
+          if [ -n "${{ secrets.AWS_ACCESS_KEY_ID }}" ] && [ -n "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ] && [ -n "${{ secrets.AWS_REGION }}" ]; then
+            echo "kind=ecr" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ secrets.DOCKERHUB_USERNAME }}" ] && [ -n "${{ secrets.DOCKERHUB_TOKEN }}" ]; then
+            echo "kind=dockerhub" >> "$GITHUB_OUTPUT"
+          else
+            echo "Faltan secrets para publicar imágenes (ECR o Docker Hub)." >&2
+            exit 1
+          fi
+
+      - if: ${{ steps.select_registry.outputs.kind == 'ecr' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - id: ecr_login
+        if: ${{ steps.select_registry.outputs.kind == 'ecr' }}
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - if: ${{ steps.select_registry.outputs.kind == 'dockerhub' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - id: image_prefix
+        run: |
+          if [ "${{ steps.select_registry.outputs.kind }}" = "ecr" ]; then
+            echo "value=${{ steps.ecr_login.outputs.registry }}/${{ env.REPO_PREFIX }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${{ secrets.DOCKERHUB_USERNAME }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.service.context }}
+          push: true
+          tags: |
+            ${{ steps.image_prefix.outputs.value }}/${{ matrix.service.name }}:${{ github.sha }}
+            ${{ steps.image_prefix.outputs.value }}/${{ matrix.service.name }}:latest
+
+  deploy:
+    if: ${{ secrets.EC2_HOST_BACK != '' && secrets.EC2_USERNAME != '' && secrets.EC2_SSH_PRIVATE_KEY != '' }}
+    runs-on: ubuntu-latest
+    needs: build_push
+    steps:
+      - uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST_BACK }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            cd /opt/innovatech
+            if [ -n "${{ secrets.DOCKERHUB_USERNAME }}" ] && [ -n "${{ secrets.DOCKERHUB_TOKEN }}" ]; then
+              echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+            fi
+            IMAGE_PREFIX="${{ secrets.DOCKERHUB_USERNAME }}"
+            IMAGE_TAG="latest"
+            export IMAGE_PREFIX IMAGE_TAG
+            docker compose pull
+            docker compose up -d --remove-orphans
