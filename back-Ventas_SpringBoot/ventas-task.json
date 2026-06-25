@@ -1,0 +1,23 @@
+{
+  "family": "ep3-ventas-task",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::ACCOUNT_ID_AQUI:role/ecsTaskExecutionRole",
+  "containerDefinitions": [
+    {
+      "name": "ventas",
+      "image": "ACCOUNT_ID_AQUI.dkr.ecr.REGION_AQUI.amazonaws.com/ep3-ventas:latest",
+      "portMappings": [ { "containerPort": 8081, "protocol": "tcp" } ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/ep3-ventas",
+          "awslogs-region": "REGION_AQUI",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}
