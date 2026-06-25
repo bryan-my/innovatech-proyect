@@ -4,25 +4,19 @@
   "requiresCompatibilities": ["FARGATE"],
   "cpu": "256",
   "memory": "512",
-  "executionRoleArn": "arn:aws:iam::ACCOUNT_ID_AQUI:role/ecsTaskExecutionRole",
+  "executionRoleArn": "arn:aws:iam::328520580274:role/LabRole",
   "containerDefinitions": [
     {
       "name": "frontend",
-      "image": "ACCOUNT_ID_AQUI.dkr.ecr.REGION_AQUI.amazonaws.com/ep3-frontend:latest",
-      "portMappings": [
-        {
-          "containerPort": 80,
-          "protocol": "tcp"
-        }
+      "image": "328520580274.dkr.ecr.us-east-1.amazonaws.com/ep3-frontend:latest",
+      "portMappings": [ { "containerPort": 80, "protocol": "tcp" } ],
+      "environment": [
+        { "name": "VITE_API_URL", "value": "http://ep3-alb-1037980832.us-east-1.elb.amazonaws.com" }
       ],
-      "logConfiguration": {
-        "logDriver": "awslogs",
-        "options": {
-          "awslogs-group": "/ecs/ep3-frontend",
-          "awslogs-region": "REGION_AQUI",
-          "awslogs-stream-prefix": "ecs"
-        }
-      }
+      "logConfiguration": { "logDriver": "awslogs", 
+        "options": { "awslogs-group": "/ecs/ep3-frontend", 
+          "awslogs-region": "us-east-1", 
+          "awslogs-stream-prefix": "ecs" } }
     }
   ]
 }
