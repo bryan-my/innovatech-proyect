@@ -1,0 +1,28 @@
+{
+  "family": "ep3-frontend-task",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::ACCOUNT_ID_AQUI:role/ecsTaskExecutionRole",
+  "containerDefinitions": [
+    {
+      "name": "frontend",
+      "image": "ACCOUNT_ID_AQUI.dkr.ecr.REGION_AQUI.amazonaws.com/ep3-frontend:latest",
+      "portMappings": [
+        {
+          "containerPort": 80,
+          "protocol": "tcp"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/ep3-frontend",
+          "awslogs-region": "REGION_AQUI",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}
