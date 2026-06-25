@@ -1,92 +1,67 @@
-name: backend-ci-cd
-
+name: Deploy Backend ECS
 on:
   push:
-    branches:
-      - deploy
-
+    branches: [ "deploy" ]
 env:
-  REPO_PREFIX: innovatech
-
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+  ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
 jobs:
-  build_push:
+  build-push-deploy:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        service:
-          - name: ms-ventas
-            context: ./back-Ventas_SpringBoot/Springboot-API-REST
-          - name: ms-despachos
-            context: ./back-Despachos_SpringBoot/Springboot-API-REST-DESPACHO
     steps:
       - uses: actions/checkout@v4
 
-      - uses: docker/setup-buildx-action@v3
-
-      - id: select_registry
-        run: |
-          if [ -n "${{ secrets.AWS_ACCESS_KEY_ID }}" ] && [ -n "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ] && [ -n "${{ secrets.AWS_REGION }}" ]; then
-            echo "kind=ecr" >> "$GITHUB_OUTPUT"
-          elif [ -n "${{ secrets.DOCKERHUB_USERNAME }}" ] && [ -n "${{ secrets.DOCKERHUB_TOKEN }}" ]; then
-            echo "kind=dockerhub" >> "$GITHUB_OUTPUT"
-          else
-            echo "Faltan secrets para publicar imágenes (ECR o Docker Hub)." >&2
-            exit 1
-          fi
-
-      - if: ${{ steps.select_registry.outputs.kind == 'ecr' }}
+      - name: Configurar credenciales AWS
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
 
-      - id: ecr_login
-        if: ${{ steps.select_registry.outputs.kind == 'ecr' }}
+      - name: Login en Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
 
-      - if: ${{ steps.select_registry.outputs.kind == 'dockerhub' }}
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - id: image_prefix
+      - name: Definir variables de imagen
         run: |
-          if [ "${{ steps.select_registry.outputs.kind }}" = "ecr" ]; then
-            echo "value=${{ steps.ecr_login.outputs.registry }}/${{ env.REPO_PREFIX }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "value=${{ secrets.DOCKERHUB_USERNAME }}" >> "$GITHUB_OUTPUT"
-          fi
+          echo "VENTAS_IMAGE=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${{ secrets.ECR_VENTAS_REPO }}:${GITHUB_SHA}" >> $GITHUB_ENV
+          echo "DESPACHOS_IMAGE=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${{ secrets.ECR_DESPACHOS_REPO }}:${GITHUB_SHA}" >> $GITHUB_ENV
 
-      - uses: docker/build-push-action@v6
-        with:
-          context: ${{ matrix.service.context }}
-          push: true
-          tags: |
-            ${{ steps.image_prefix.outputs.value }}/${{ matrix.service.name }}:${{ github.sha }}
-            ${{ steps.image_prefix.outputs.value }}/${{ matrix.service.name }}:latest
+      - name: Build y Push Ventas
+        run: |
+          docker build -t $VENTAS_IMAGE ./back-Ventas_SpringBoot/Springboot-API-REST
+          docker push $VENTAS_IMAGE
 
-  deploy:
-    if: ${{ secrets.EC2_HOST_BACK != '' && secrets.EC2_USERNAME != '' && secrets.EC2_SSH_PRIVATE_KEY != '' }}
-    runs-on: ubuntu-latest
-    needs: build_push
-    steps:
-      - uses: appleboy/ssh-action@v1.0.3
+      - name: Build y Push Despachos
+        run: |
+          docker build -t $DESPACHOS_IMAGE ./back-Despachos_SpringBoot/Springboot-API-REST-DESPACHO
+          docker push $DESPACHOS_IMAGE
+
+      - name: Render y Deploy Ventas
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
-          host: ${{ secrets.EC2_HOST_BACK }}
-          username: ${{ secrets.EC2_USERNAME }}
-          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
-          script: |
-            set -e
-            cd /opt/innovatech
-            if [ -n "${{ secrets.DOCKERHUB_USERNAME }}" ] && [ -n "${{ secrets.DOCKERHUB_TOKEN }}" ]; then
-              echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
-            fi
-            IMAGE_PREFIX="${{ secrets.DOCKERHUB_USERNAME }}"
-            IMAGE_TAG="latest"
-            export IMAGE_PREFIX IMAGE_TAG
-            docker compose pull
-            docker compose up -d --remove-orphans
+          task-definition: back-Ventas_SpringBoot/ventas-task.json
+          container-name: ventas
+          image: ${{ env.VENTAS_IMAGE }}
+        id: render-ventas
+      - uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render-ventas.outputs.task-definition }}
+          service: ${{ secrets.ECS_VENTAS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+
+      - name: Render y Deploy Despachos
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: back-Despachos_SpringBoot/despachos-task.json
+          container-name: despachos
+          image: ${{ env.DESPACHOS_IMAGE }}
+        id: render-despachos
+      - uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render-despachos.outputs.task-definition }}
+          service: ${{ secrets.ECS_DESPACHOS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
